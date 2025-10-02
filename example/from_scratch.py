@@ -83,6 +83,35 @@ class UpdatedLinearRegressionScratch:
         """
         return np.dot(X, self.coef_) + self.intercept_
     
+class MultipleLinearRegressionScratch:
+    """
+    Custom implementation of multiple linear regression using ordinary least squares (OLS).
+    """
+    def __init__(self):
+        self.coef_ = None
+        self.intercept_ = None
+
+    def fit(self, X, y):
+        """
+        Fits the multiple linear regression model to the given data.
+        Args:
+            X: A numpy array of shape (n_samples, n_features) representing the input data.
+            y: A numpy array of shape (n_samples,) representing the target values.
+        """
+        # Calculate coefficients using the closed-form solution
+        self.coef_ = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, y))
+        self.intercept_ = np.mean(y - np.dot(X, self.coef_))
+
+    def predict(self, X):
+        """
+        Predicts the target values for new data.
+        Args:
+            X: A numpy array of shape (n_samples, n_features) representing the new input data.
+        Returns:
+            A numpy array of shape (n_samples,) representing the predicted target values.
+        """
+        return np.dot(X, self.coef_) + self.intercept_
+    
 class PolyRegressionScratch:
     """
     Custom implementation of linear regression using ordinary least squares (OLS).
