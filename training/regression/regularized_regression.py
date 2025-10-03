@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pickle
+import os
 
 class RidgeRegression:
     """
@@ -84,7 +86,7 @@ class RidgeRegression:
         X = np.array(X)
         return X @ self.coefficients + self.intercept
 
-    def plot_loss(self):
+    def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
         plt.plot(range(self.n_iterations), self.loss_history, label='Ridge Loss (MSE + L2)')
@@ -94,7 +96,28 @@ class RidgeRegression:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
+
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Plot saved to {save_path}")
         plt.show()
+
+    def save_weights(self, filepath):
+        """Save model weights to file."""
+        weights = {k: v for k, v in self.__dict__.items()}
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(weights, f)
+        print(f"Model weights saved to {filepath}")
+
+    def load_weights(self, filepath):
+        """Load model weights from file."""
+        with open(filepath, 'rb') as f:
+            weights = pickle.load(f)
+        for k, v in weights.items():
+            setattr(self, k, v)
+        print(f"Model weights loaded from {filepath}")
 
 
 class LassoRegression:
@@ -203,7 +226,7 @@ class LassoRegression:
         else:
             return {f"feature_{idx}": self.coefficients[idx] for idx in selected_indices}
 
-    def plot_loss(self):
+    def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
         plt.plot(range(self.n_iterations), self.loss_history, label='Lasso Loss (MSE + L1)')
@@ -213,4 +236,25 @@ class LassoRegression:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
+
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Plot saved to {save_path}")
         plt.show()
+
+    def save_weights(self, filepath):
+        """Save model weights to file."""
+        weights = {k: v for k, v in self.__dict__.items()}
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(weights, f)
+        print(f"Model weights saved to {filepath}")
+
+    def load_weights(self, filepath):
+        """Load model weights from file."""
+        with open(filepath, 'rb') as f:
+            weights = pickle.load(f)
+        for k, v in weights.items():
+            setattr(self, k, v)
+        print(f"Model weights loaded from {filepath}")

@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pickle
+import os
 
 class LinearRegression:
     """
@@ -60,6 +62,27 @@ class LinearRegression:
         """
         X = np.array(X)
         return X @ self.coefficients + self.intercept
+
+    def save_weights(self, filepath):
+        """Save model weights to file."""
+        weights = {
+            'coefficients': self.coefficients,
+            'intercept': self.intercept,
+            'fit_intercept': self.fit_intercept
+        }
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(weights, f)
+        print(f"Model weights saved to {filepath}")
+
+    def load_weights(self, filepath):
+        """Load model weights from file."""
+        with open(filepath, 'rb') as f:
+            weights = pickle.load(f)
+        self.coefficients = weights['coefficients']
+        self.intercept = weights['intercept']
+        self.fit_intercept = weights['fit_intercept']
+        print(f"Model weights loaded from {filepath}")
 
 
 class LinearRegressionGD:
@@ -133,14 +156,44 @@ class LinearRegressionGD:
         X = np.array(X)
         return X @ self.coefficients + self.intercept
 
-    def plot_loss(self):
+    def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
-        plt.plot(range(self.n_iterations), self.loss_history, label='MSE Loss')
+        plt.plot(range(len(self.loss_history)), self.loss_history, label='MSE Loss')
         plt.xlabel("Iteration")
         plt.ylabel("Loss (MSE)")
         plt.title("Loss Curve: Linear Regression (Gradient Descent)")
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
+
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Plot saved to {save_path}")
         plt.show()
+
+    def save_weights(self, filepath):
+        """Save model weights to file."""
+        weights = {
+            'coefficients': self.coefficients,
+            'intercept': self.intercept,
+            'learning_rate': self.learning_rate,
+            'n_iterations': self.n_iterations,
+            'loss_history': self.loss_history
+        }
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(weights, f)
+        print(f"Model weights saved to {filepath}")
+
+    def load_weights(self, filepath):
+        """Load model weights from file."""
+        with open(filepath, 'rb') as f:
+            weights = pickle.load(f)
+        self.coefficients = weights['coefficients']
+        self.intercept = weights['intercept']
+        self.learning_rate = weights['learning_rate']
+        self.n_iterations = weights['n_iterations']
+        self.loss_history = weights.get('loss_history', [])
+        print(f"Model weights loaded from {filepath}")
