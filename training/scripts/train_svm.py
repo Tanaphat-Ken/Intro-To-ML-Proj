@@ -8,9 +8,12 @@ from collections import Counter
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.decomposition import PCA
-from sklearn.metrics import accuracy_score, f1_score, classification_report
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix, ConfusionMatrixDisplay
 from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import RandomOverSampler
+from sklearn.metrics import precision_recall_fscore_support
 import matplotlib.pyplot as plt
+import os
 
 from training.classification.support_vector_machine import KernelSVMClassifier
 class OneVsRestKernelSVM:    
@@ -71,15 +74,18 @@ def main(data_path):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Downsample to median
+ # Downsample to median
     class_counts = Counter(y_train)
     median_count = int(np.median(list(class_counts.values())))
     downsample_strategy = {cls: min(count, median_count) for cls, count in class_counts.items()}
-    
     rus = RandomUnderSampler(sampling_strategy=downsample_strategy, random_state=42)
-    X_resampled, y_resampled = rus.fit_resample(X_train, y_train)
-    
-    print(f"After downsampling: {X_resampled.shape}")
+    X_under, y_under = rus.fit_resample(X_train, y_train)
+    target_3 = median_count
+
+    ros = RandomOverSampler(sampling_strategy={3: target_3}, random_state=42)
+    X_resampled, y_resampled = ros.fit_resample(X_under, y_under)
+
+    print(f"After resampling: {X_resampled.shape}")
     print(f"Class distribution: {Counter(y_resampled)}")
 
     # Scale first, then PCA (correct order, no data leakage)
@@ -88,7 +94,7 @@ def main(data_path):
     X_test_scaled = scaler.transform(X_test)
 
     # PCA after scaling - fit on train only, transform both
-    n_components = min(30, X_resampled_scaled.shape[1], len(X_resampled_scaled)-1)
+    n_components = min(40, X_resampled_scaled.shape[1], len(X_resampled_scaled)-1)
     pca = PCA(n_components=n_components, random_state=42)
     X_resampled_pca = pca.fit_transform(X_resampled_scaled)
     X_test_pca = pca.transform(X_test_scaled)
@@ -175,12 +181,101 @@ def main(data_path):
     
     train_pred = np.argmax(oof, axis=1)
     test_pred = np.argmax(preds_test, axis=1)
-    
+
     print(f"\nTest Accuracy: {accuracy_score(y_test, test_pred):.4f}")
     print(f"Test F1 (Macro): {f1_score(y_test, test_pred, average='macro'):.4f}")
     print(f"Test F1 (Weighted): {f1_score(y_test, test_pred, average='weighted'):.4f}")
     print("\nClassification Report:")
     print(classification_report(y_test, test_pred))
+
+    # Confusion Matrix
+    conf_mat = confusion_matrix(y_test, test_pred)
+    print("\nConfusion Matrix (raw counts):")
+    print(conf_mat)
+
+    conf_mat_norm = confusion_matrix(y_test, test_pred, normalize='true')
+    print("\nConfusion Matrix (normalized):")
+    print(np.round(conf_mat_norm, 3))
+
+    # Create output directory if it doesn't exist
+    os.makedirs('output/plots', exist_ok=True)
+
+    # Plot confusion matrix
+    _, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+    disp1 = ConfusionMatrixDisplay(confusion_matrix=conf_mat)
+    disp1.plot(ax=ax[0], cmap='Blues', colorbar=False)
+    ax[0].set_title("Confusion Matrix (Counts)", fontsize=14, fontweight='bold')
+
+    disp2 = ConfusionMatrixDisplay(confusion_matrix=conf_mat_norm)
+    disp2.plot(ax=ax[1], cmap='Blues', colorbar=False)
+    ax[1].set_title("Confusion Matrix (Normalized)", fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+    cm_path = 'output/plots/svm_confusion_matrix.png'
+    plt.savefig(cm_path, dpi=300, bbox_inches='tight')
+    print(f"\n✓ Saved confusion matrix to {cm_path}")
+    plt.close()
+
+    precision, recall, f1, support = precision_recall_fscore_support(y_test, test_pred)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(len(precision))
+    width = 0.25
+
+    ax.bar(x - width, precision, width, label='Precision', alpha=0.8)
+    ax.bar(x, recall, width, label='Recall', alpha=0.8)
+    ax.bar(x + width, f1, width, label='F1-Score', alpha=0.8)
+
+    ax.set_xlabel('Class', fontsize=12)
+    ax.set_ylabel('Score', fontsize=12)
+    ax.set_title('Per-Class Performance Metrics (SVM)', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'Class {i}' for i in range(len(precision))])
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim([0, 1.0])
+
+    plt.tight_layout()
+    metrics_path = 'output/plots/svm_class_metrics.png'
+    plt.savefig(metrics_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved class metrics plot to {metrics_path}")
+    plt.close()
+
+    # Plot prediction distribution
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # True distribution
+    true_counts = np.bincount(y_test)
+    pred_counts = np.bincount(test_pred, minlength=len(true_counts))
+
+    x = np.arange(len(true_counts))
+    ax1.bar(x, true_counts, alpha=0.7, label='True', color='green')
+    ax1.set_xlabel('Class', fontsize=12)
+    ax1.set_ylabel('Count', fontsize=12)
+    ax1.set_title('True Class Distribution', fontsize=14, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Predicted distribution
+    ax2.bar(x, pred_counts, alpha=0.7, label='Predicted', color='orange')
+    ax2.set_xlabel('Class', fontsize=12)
+    ax2.set_ylabel('Count', fontsize=12)
+    ax2.set_title('Predicted Class Distribution', fontsize=14, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    dist_path = 'output/plots/svm_class_distribution.png'
+    plt.savefig(dist_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved class distribution plot to {dist_path}")
+    plt.close()
+
+    print(f"\n{'='*60}")
+    print("All plots saved to output/plots/")
+    print(f"{'='*60}")
 
 if __name__ == "__main__":
     import argparse
