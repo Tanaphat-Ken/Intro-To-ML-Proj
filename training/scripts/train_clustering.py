@@ -1,456 +1,334 @@
-"""Training script for from-scratch clustering algorithms (K-Means & Agglomerative)."""
+"""Training script for clustering-based classification with K-Fold CV."""
 
-import argparse
-import json
 import sys
-from pathlib import Path
-from typing import Any, Optional
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import (
-    accuracy_score,
-    adjusted_rand_score,
-    calinski_harabasz_score,
-    classification_report,
-    confusion_matrix,
-    davies_bouldin_score,
-    f1_score,
-    normalized_mutual_info_score,
-    precision_score,
-    recall_score,
-    silhouette_score,
-)
-from sklearn.preprocessing import StandardScaler
+from collections import Counter
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.metrics import accuracy_score, f1_score, classification_report
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import RandomOverSampler
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, silhouette_score
+from training.classification.clustering import KMeansScratch
+import matplotlib.pyplot as plt
 
-SCRIPT_PATH = Path(__file__).resolve()
-SYS_PATH_ROOT = SCRIPT_PATH.parents[2]
-if str(SYS_PATH_ROOT) not in sys.path:
-    sys.path.append(str(SYS_PATH_ROOT))
+def find_optimal_k(X, k_range=range(2, 21), random_state=42, output_dir='output'):
+    """Find optimal number of clusters using Elbow and Silhouette methods.
 
-DATA_DIR = SYS_PATH_ROOT / "data"
-OUTPUT_DIR = SYS_PATH_ROOT / "output"
-REPORTS_DIR = OUTPUT_DIR
+    Parameters
+    ----------
+    X : array-like of shape (n_samples, n_features)
+        Training data (already scaled/transformed).
+    k_range : range or list
+        Range of k values to test.
+    random_state : int
+        Random seed for reproducibility.
+    output_dir : str
+        Directory to save plots.
 
-from training.classification.clustering import (  # noqa: E402
-    AgglomerativeClusteringScratch,
-    KMeansScratch,
-)
+    Returns
+    -------
+    dict : Dictionary with metrics for each k value
+    """
+    inertias = []
+    silhouette_scores = []
+    k_values = list(k_range)
 
+    print("\nFinding optimal k using Elbow and Silhouette methods...")
+    print(f"Testing k values from {min(k_values)} to {max(k_values)}")
 
-def _resolve_dataset_path(path_str: str) -> Path:
-    candidate = Path(path_str)
-    potential_paths = [candidate]
+    for k in k_values:
+        print(f"  k={k}...", end=" ")
 
-    if not candidate.is_absolute():
-        potential_paths.extend([Path.cwd() / candidate, DATA_DIR / candidate])
-
-    if candidate.suffix == "":
-        potential_paths.extend(
-            [p.with_suffix(ext) for p in potential_paths for ext in (".parquet", ".csv")]
+        # Fit K-Means
+        kmeans = KMeansScratch(
+            n_clusters=k,
+            max_iter=1000,
+            n_init=10,
+            tol=1e-4,
+            random_state=random_state
         )
+        cluster_labels = kmeans.fit_predict(X)
 
-    for path in potential_paths:
-        if path.exists():
-            return path
+        # Compute metrics
+        inertia = kmeans.inertia_
+        silhouette = silhouette_score(X, cluster_labels, metric='euclidean')
 
-    searched = "\n".join(str(p) for p in potential_paths)
-    raise FileNotFoundError(f"Could not locate dataset '{path_str}'. Paths tried:\n{searched}")
+        inertias.append(inertia)
+        silhouette_scores.append(silhouette)
 
+        print(f"Inertia={inertia:.2f}, Silhouette={silhouette:.4f}")
 
-def load_dataset(
-    data_path: str,
-    target_column: Optional[str],
-) -> tuple[np.ndarray, Optional[np.ndarray], list[str], pd.DataFrame]:
-    dataset_path = _resolve_dataset_path(data_path)
-    if dataset_path.suffix.lower() == ".parquet":
-        df = pd.read_parquet(dataset_path)
-    elif dataset_path.suffix.lower() == ".csv":
-        df = pd.read_csv(dataset_path)
-    else:
-        raise ValueError(
-            f"Unsupported file extension '{dataset_path.suffix}'. Use CSV or Parquet files."
-        )
+    # Plot results
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    y: Optional[np.ndarray] = None
-    if target_column:
-        if target_column not in df.columns:
-            raise KeyError(
-                f"Target column '{target_column}' not found. Available columns: {df.columns.tolist()}"
-            )
-        target_series = (
-            df[target_column]
-            .astype("string")
-            .fillna("")
-            .str.strip()
-            .str.lower()
-        )
-        y_mapped = np.where(target_series == "completed", "Completed", "Other")
-        y = y_mapped.astype(str)
-        feature_df = df.drop(columns=[target_column])
-    else:
-        feature_df = df
+    # Elbow plot
+    ax1.plot(k_values, inertias, 'bo-', linewidth=2, markersize=8)
+    ax1.set_xlabel('Number of clusters (k)', fontsize=12)
+    ax1.set_ylabel('Inertia (Sum of squared distances)', fontsize=12)
+    ax1.set_title('Elbow Method', fontsize=14, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xticks(k_values)
 
-    X = feature_df.to_numpy(dtype=np.float32)
-    feature_names = feature_df.columns.tolist()
-    return X, y, feature_names, feature_df.copy()
+    # Silhouette plot
+    ax2.plot(k_values, silhouette_scores, 'ro-', linewidth=2, markersize=8)
+    ax2.set_xlabel('Number of clusters (k)', fontsize=12)
+    ax2.set_ylabel('Silhouette Score', fontsize=12)
+    ax2.set_title('Silhouette Analysis', fontsize=14, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xticks(k_values)
+    ax2.axhline(y=0, color='black', linestyle='--', alpha=0.3)
 
+    # Mark best silhouette
+    best_k = k_values[np.argmax(silhouette_scores)]
+    best_silhouette = max(silhouette_scores)
+    ax2.axvline(x=best_k, color='green', linestyle='--', alpha=0.5,
+                label=f'Best k={best_k} (Silhouette={best_silhouette:.4f})')
+    ax2.legend()
 
-def _cluster_size_summary(labels: np.ndarray) -> dict[str, int]:
-    unique, counts = np.unique(labels, return_counts=True)
-    return {str(label): int(count) for label, count in zip(unique, counts)}
+    plt.tight_layout()
+    plot_path = f'{output_dir}/optimal_k_analysis.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    print(f"\n✓ Saved optimal k analysis plot to {plot_path}")
+    plt.close()
 
-
-def _safe_metric(
-    metric_fn,
-    X: np.ndarray,
-    labels: np.ndarray,
-    *,
-    random_state: Optional[int] = None,
-    max_samples: int = 2000,
-) -> Optional[float]:
-    try:
-        unique_labels = np.unique(labels)
-        if unique_labels.size < 2 or unique_labels.size >= len(labels):
-            return None
-        X_evaluate = X
-        labels_evaluate = labels
-        if max_samples > 0 and X.shape[0] > max_samples:
-            rng = np.random.default_rng(random_state)
-            sample_indices = rng.choice(X.shape[0], max_samples, replace=False)
-            X_evaluate = X[sample_indices]
-            labels_evaluate = labels[sample_indices]
-        return float(metric_fn(X_evaluate, labels_evaluate))
-    except Exception:  # pragma: no cover - defensive safeguard
-        return None
-
-
-def _evaluate_against_labels(
-    y_true: np.ndarray,
-    labels: np.ndarray,
-) -> dict[str, float]:
-    y_cast = np.asarray(y_true)
-    if y_cast.ndim != 1:
-        y_cast = y_cast.reshape(-1)
-    y_cast = y_cast.astype(str)
-    return {
-        "adjusted_rand_index": float(adjusted_rand_score(y_cast, labels)),
-        "normalized_mutual_info": float(normalized_mutual_info_score(y_cast, labels)),
+    # Return results
+    results = {
+        'k_values': k_values,
+        'inertias': inertias,
+        'silhouette_scores': silhouette_scores,
+        'best_k_silhouette': best_k,
+        'best_silhouette_score': best_silhouette
     }
 
+    print(f"\n{'='*60}")
+    print(f"OPTIMAL K RECOMMENDATION:")
+    print(f"{'='*60}")
+    print(f"Best k (by Silhouette): {best_k}")
+    print(f"Silhouette score: {best_silhouette:.4f}")
+    print(f"{'='*60}\n")
 
-def _majority_label_mapping(cluster_labels: np.ndarray, y_true: np.ndarray) -> dict[int, str]:
-    mapping: dict[int, str] = {}
-    for cluster in np.unique(cluster_labels):
-        mask = cluster_labels == cluster
-        values, counts = np.unique(y_true[mask], return_counts=True)
-        if values.size == 0:
-            continue
-        majority_label = values[np.argmax(counts)]
-        mapping[int(cluster)] = str(majority_label)
-    return mapping
+    return results
 
 
-def _classify_clusters(
-    cluster_labels: np.ndarray,
-    y_true: np.ndarray,
-    *,
-    class_order: Optional[list[str]] = None,
-) -> tuple[dict[int, str], np.ndarray, dict[str, Any]]:
-    mapping = _majority_label_mapping(cluster_labels, y_true)
-    predicted_labels = np.vectorize(lambda label: mapping.get(int(label), "Unknown"))(cluster_labels)
+class KMeansClassifier:
+    """K-Means clustering used for classification via nearest centroid."""
 
-    if class_order is None:
-        class_order = [str(cls) for cls in np.unique(y_true)]
+    def __init__(self, n_clusters=5, max_iter=300, n_init=10, tol=1e-4, random_state=None):
+        self.n_clusters = n_clusters
+        self.max_iter = max_iter
+        self.n_init = n_init
+        self.tol = tol
+        self.random_state = random_state
+        self.kmeans = None
+        self.label_mapping = None
 
-    report_dict = classification_report(
-        y_true,
-        predicted_labels,
-        labels=class_order,
-        target_names=class_order,
-        zero_division=0,
-        output_dict=True,
+    def fit(self, X, y):
+        """Fit K-Means and map clusters to class labels."""
+        self.kmeans = KMeansScratch(
+            n_clusters=self.n_clusters,
+            max_iter=self.max_iter,
+            n_init=self.n_init,
+            tol=self.tol,
+            random_state=self.random_state
+        )
+        cluster_labels = self.kmeans.fit_predict(X)
+
+        # Map each cluster to the majority class
+        self.label_mapping = {}
+        self.classes_ = np.unique(y)
+
+        # First pass: assign clusters to their majority class
+        for cluster_id in range(self.n_clusters):
+            mask = cluster_labels == cluster_id
+            if np.sum(mask) > 0:
+                cluster_classes = y[mask]
+                most_common = Counter(cluster_classes).most_common(1)[0][0]
+                self.label_mapping[cluster_id] = most_common
+
+        # Second pass: ensure all classes are represented
+        # Find which classes have no clusters assigned
+        mapped_classes = set(self.label_mapping.values())
+        missing_classes = set(self.classes_) - mapped_classes
+
+        if missing_classes:
+            # For each missing class, find the cluster with highest proportion of that class
+            for missing_class in missing_classes:
+                best_cluster = None
+                best_proportion = -1
+
+                for cluster_id in range(self.n_clusters):
+                    mask = cluster_labels == cluster_id
+                    if np.sum(mask) > 0:
+                        cluster_classes = y[mask]
+                        proportion = np.sum(cluster_classes == missing_class) / len(cluster_classes)
+
+                        if proportion > best_proportion:
+                            best_proportion = proportion
+                            best_cluster = cluster_id
+
+                # Reassign this cluster to the missing class
+                if best_cluster is not None:
+                    self.label_mapping[best_cluster] = missing_class
+
+        return self
+
+    def predict(self, X):
+        """Predict class labels by assigning to nearest cluster."""
+        cluster_labels = self.kmeans.predict(X)
+        predictions = np.array([self.label_mapping.get(c, -1) for c in cluster_labels])
+        return predictions
+
+
+def main(data_path, best_k=None, find_k=False):
+    # Load data
+    if data_path.endswith('.parquet'):
+        df = pd.read_parquet(data_path)
+    else:
+        df = pd.read_csv(data_path)
+
+    if df['Booking Status'].dtype == 'object':
+        le = LabelEncoder()
+        df['Booking Status'] = le.fit_transform(df['Booking Status'])
+
+    X = df.drop('Booking Status', axis=1)
+    y = df['Booking Status']
+
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
-    conf = confusion_matrix(y_true, predicted_labels, labels=class_order)
 
-    metrics = {
-        "accuracy": float(accuracy_score(y_true, predicted_labels)),
-        "precision_macro": float(precision_score(y_true, predicted_labels, average="macro", zero_division=0)),
-        "precision_weighted": float(precision_score(y_true, predicted_labels, average="weighted", zero_division=0)),
-        "recall_macro": float(recall_score(y_true, predicted_labels, average="macro", zero_division=0)),
-        "recall_weighted": float(recall_score(y_true, predicted_labels, average="weighted", zero_division=0)),
-        "f1_macro": float(f1_score(y_true, predicted_labels, average="macro", zero_division=0)),
-        "f1_weighted": float(f1_score(y_true, predicted_labels, average="weighted", zero_division=0)),
-        "confusion_matrix": conf.tolist(),
-        "classification_report": report_dict,
-        "cluster_label_mapping": {str(cluster): label for cluster, label in mapping.items()},
-    }
-    return mapping, predicted_labels, metrics
+    # Downsample to median
+    class_counts = Counter(y_train)
+    median_count = int(np.median(list(class_counts.values())))
+    downsample_strategy = {cls: min(count, median_count) for cls, count in class_counts.items()}
+    rus = RandomUnderSampler(sampling_strategy=downsample_strategy, random_state=42)
+    X_under, y_under = rus.fit_resample(X_train, y_train)
+    target_3 = median_count
 
+    ros = RandomOverSampler(sampling_strategy={3: target_3}, random_state=42)
+    X_resampled, y_resampled = ros.fit_resample(X_under, y_under)
 
-def run_kmeans(
-    X: np.ndarray,
-    n_clusters: int,
-    random_state: Optional[int],
-) -> tuple[KMeansScratch, dict[str, Any], np.ndarray]:
-    model = KMeansScratch(n_clusters=n_clusters, random_state=random_state)
-    labels = model.fit_predict(X)
-    metrics = {
-        "n_clusters": n_clusters,
-        "n_iter": model.n_iter_,
-        "inertia": float(model.inertia_ if model.inertia_ is not None else np.nan),
-        "cluster_sizes": _cluster_size_summary(labels),
-    }
-    if model.cluster_centers_ is not None:
-        metrics["cluster_centers"] = model.cluster_centers_.tolist()
-    return model, metrics, labels
+    print(f"After resampling: {X_resampled.shape}")
+    print(f"Class distribution: {Counter(y_resampled)}")
 
+    # Scale first, then PCA (correct order)
+    scaler = StandardScaler()
+    X_resampled_scaled = scaler.fit_transform(X_resampled)
+    X_test_scaled = scaler.transform(X_test)
 
-def run_agglomerative(
-    X: np.ndarray,
-    n_clusters: int,
-    linkage: str,
-) -> tuple[AgglomerativeClusteringScratch, dict[str, Any], np.ndarray]:
-    model = AgglomerativeClusteringScratch(n_clusters=n_clusters, linkage=linkage)
-    labels = model.fit_predict(X)
-    metrics = {
-        "n_clusters": int(np.unique(labels).size),
-        "cluster_sizes": _cluster_size_summary(labels),
-        "linkage": linkage,
-        "merge_history_length": len(model.merge_history_),
-    }
-    if model.distance_history_:
-        metrics["last_merge_distance"] = float(model.distance_history_[-1])
-    return model, metrics, labels
+    # PCA after scaling
+    pca = PCA(n_components=0.9, random_state=42)
+    X_resampled_pca = pca.fit_transform(X_resampled_scaled)
+    X_test_pca = pca.transform(X_test_scaled)
 
+    train_scaled = X_resampled_pca
+    test_scaled = X_test_pca
 
-def main(args: argparse.Namespace) -> None:
-    print("Loading dataset...")
-    X_raw, y_raw, feature_names, feature_df = load_dataset(args.data, args.target)
+    print(f"PCA reduced to {train_scaled.shape[1]} components explaining {pca.explained_variance_ratio_.sum():.2f} variance")
 
-    scaler = StandardScaler() if args.scale else None
-    X = scaler.fit_transform(X_raw) if scaler is not None else X_raw
-    rng = np.random.default_rng(args.random_state)
+    y_resampled_array = y_resampled.values if hasattr(y_resampled, 'values') else y_resampled
 
-    label_array: Optional[np.ndarray] = None
-    label_classes: Optional[list[str]] = None
-    if y_raw is not None:
-        label_array = np.asarray(y_raw, dtype=str)
-        label_classes = ["Other", "Completed"]
-
-    results: dict[str, Any] = {
-        "dataset": args.data,
-        "feature_names": feature_names,
-        "scaled": bool(args.scale),
-        "n_samples": int(X.shape[0]),
-        "n_features": int(X.shape[1]),
-        "agglomerative_max_samples": args.agglomerative_max_samples,
-    }
-    if label_classes is not None:
-        results["label_classes"] = label_classes
-
-    assignments_df = feature_df.copy()
-    if label_array is not None:
-        assignments_df["true_label"] = label_array
-
-    if args.algorithm in {"kmeans", "both"}:
-        print("Running K-Means clustering...")
-        kmeans_model, kmeans_metrics, kmeans_labels = run_kmeans(
-            X, args.n_clusters, args.random_state
+    # Find optimal k if requested
+    if find_k:
+        optimal_k_results = find_optimal_k(
+            train_scaled,
+            k_range=range(2, 21),
+            random_state=42,
+            output_dir='output'
         )
-        assignments_df["kmeans_label"] = kmeans_labels
-        kmeans_metrics["silhouette"] = _safe_metric(
-            silhouette_score, X, kmeans_labels, random_state=args.random_state
+        if best_k is None:
+            best_k = optimal_k_results['best_k_silhouette']
+            print(f"Using automatically selected k={best_k}")
+    else:
+        if best_k is None:
+            best_k = 5  # default
+            print(f"Using default k={best_k}")
+
+    # Use the selected best_k
+    print(f"\nTraining K-Means with n_clusters={best_k}...")
+    print(f"Parameters: n_clusters={best_k}, max_iter=300, n_init=10, tol=1e-4, random_state=42")
+
+    # Train final model with K-Fold
+    n_splits = 11
+    skf = StratifiedKFold(n_splits=n_splits, random_state=42, shuffle=True)
+    n_classes = len(np.unique(y_resampled_array))
+
+    oof_predictions = np.zeros(len(train_scaled), dtype=int)
+    test_predictions_sum = np.zeros((len(test_scaled), n_classes))
+
+    print(f"\nTraining with {n_splits}-fold CV...")
+    for fold, (train_idx, val_idx) in enumerate(skf.split(train_scaled, y_resampled_array)):
+        print(f"Fold {fold+1}/{n_splits}...", end=" ")
+
+        kmeans_clf = KMeansClassifier(
+            n_clusters=best_k,
+            max_iter=2000,
+            n_init=10,
+            tol=1e-4,
+            random_state=42
         )
-        kmeans_metrics["davies_bouldin"] = _safe_metric(
-            davies_bouldin_score, X, kmeans_labels, random_state=args.random_state
-        )
-        kmeans_metrics["calinski_harabasz"] = _safe_metric(
-            calinski_harabasz_score, X, kmeans_labels, random_state=args.random_state
-        )
-        if label_array is not None:
-            kmeans_metrics.update(_evaluate_against_labels(label_array, kmeans_labels))
-            mapping, predicted_labels, clf_metrics = _classify_clusters(
-                kmeans_labels,
-                label_array,
-                class_order=label_classes,
-            )
-            assignments_df["kmeans_predicted_label"] = predicted_labels
-            kmeans_metrics["classification_evaluation"] = clf_metrics
+        kmeans_clf.fit(train_scaled[train_idx], y_resampled_array[train_idx])
 
-            print("\nK-Means classification-style evaluation (majority vote):")
-            print("=" * 50)
-            print(f"Accuracy: {clf_metrics['accuracy']:.4f}")
-            print(f"Macro F1: {clf_metrics['f1_macro']:.4f}")
-            print(f"Weighted F1: {clf_metrics['f1_weighted']:.4f}")
-            print("Cluster → Label mapping:")
-            for cluster, label in mapping.items():
-                print(f"  Cluster {cluster}: {label}")
-            conf_matrix = np.array(clf_metrics["confusion_matrix"], dtype=int)
-            print("\nConfusion Matrix:")
-            print(conf_matrix)
-            print("\nClassification Report:")
-            print(
-                classification_report(
-                    label_array,
-                    predicted_labels,
-                    labels=label_classes,
-                    target_names=label_classes,
-                    zero_division=0,
-                )
-            )
-        results["kmeans"] = kmeans_metrics
+        # Out-of-fold predictions
+        oof_predictions[val_idx] = kmeans_clf.predict(train_scaled[val_idx])
 
-    if args.algorithm in {"agglomerative", "both"}:
-        print(f"Running Agglomerative clustering (linkage='{args.linkage}')...")
+        # Test predictions (will be averaged)
+        test_pred = kmeans_clf.predict(test_scaled)
+        for idx, pred_class in enumerate(test_pred):
+            if pred_class >= 0:  # valid prediction
+                test_predictions_sum[idx, pred_class] += 1
 
-        limit = args.agglomerative_max_samples or 0
-        sample_size = X.shape[0]
-        if limit > 0 and X.shape[0] > limit:
-            sample_size = limit
+        print("Done")
 
-        sample_indices = np.arange(X.shape[0])
-        if sample_size < X.shape[0]:
-            sample_indices = np.sort(
-                rng.choice(X.shape[0], sample_size, replace=False)
-            )
+    # Final test predictions (majority vote)
+    test_pred = np.argmax(test_predictions_sum, axis=1)
 
-        X_ag = X[sample_indices]
-        ag_model, ag_metrics, ag_labels_subset = run_agglomerative(
-            X_ag, args.n_clusters, args.linkage
-        )
+    print(f"\nTest Accuracy: {accuracy_score(y_test, test_pred):.4f}")
+    print(f"Test F1 (Macro): {f1_score(y_test, test_pred, average='macro'):.4f}")
+    print(f"Test F1 (Weighted): {f1_score(y_test, test_pred, average='weighted'):.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, test_pred))
 
-        full_labels = np.empty(X.shape[0], dtype=int)
-        full_labels[sample_indices] = ag_labels_subset
+    conf_mat = confusion_matrix(y_test, test_pred)
+    print("\nConfusion Matrix (raw counts):")
+    print(conf_mat)
 
-        if sample_indices.size < X.shape[0]:
-            unique_clusters = np.unique(ag_labels_subset)
-            centroids = np.vstack(
-                [X_ag[ag_labels_subset == cluster].mean(axis=0) for cluster in unique_clusters]
-            )
-            remaining_indices = np.setdiff1d(np.arange(X.shape[0]), sample_indices, assume_unique=True)
-            distances = np.linalg.norm(
-                X[remaining_indices][:, None, :] - centroids[None, :, :], axis=2
-            )
-            nearest_clusters = unique_clusters[np.argmin(distances, axis=1)]
-            full_labels[remaining_indices] = nearest_clusters
-            ag_metrics["sample_size"] = int(sample_indices.size)
-            ag_metrics["assigned_via_centroid"] = int(remaining_indices.size)
-        else:
-            ag_metrics["sample_size"] = int(sample_indices.size)
+    # Optional: normalized version (percentages)
+    conf_mat_norm = confusion_matrix(y_test, test_pred, normalize='true')
+    print("\nConfusion Matrix (normalized):")
+    print(np.round(conf_mat_norm, 3))
 
-        ag_labels = full_labels
-        ag_metrics["n_clusters"] = int(np.unique(ag_labels).size)
-        assignments_df["agglomerative_label"] = ag_labels
-        ag_metrics["silhouette"] = _safe_metric(
-            silhouette_score, X, ag_labels, random_state=args.random_state
-        )
-        ag_metrics["davies_bouldin"] = _safe_metric(
-            davies_bouldin_score, X, ag_labels, random_state=args.random_state
-        )
-        ag_metrics["calinski_harabasz"] = _safe_metric(
-            calinski_harabasz_score, X, ag_labels, random_state=args.random_state
-        )
-        if label_array is not None:
-            ag_metrics.update(_evaluate_against_labels(label_array, ag_labels))
-            mapping, predicted_labels, clf_metrics = _classify_clusters(
-                ag_labels,
-                label_array,
-                class_order=label_classes,
-            )
-            assignments_df["agglomerative_predicted_label"] = predicted_labels
-            ag_metrics["classification_evaluation"] = clf_metrics
+    # Plot confusion matrix
+    _, ax = plt.subplots(1, 2, figsize=(12, 5))
 
-            print("\nAgglomerative classification-style evaluation (majority vote):")
-            print("=" * 50)
-            print(f"Accuracy: {clf_metrics['accuracy']:.4f}")
-            print(f"Macro F1: {clf_metrics['f1_macro']:.4f}")
-            print(f"Weighted F1: {clf_metrics['f1_weighted']:.4f}")
-            print("Cluster → Label mapping:")
-            for cluster, label in mapping.items():
-                print(f"  Cluster {cluster}: {label}")
-            conf_matrix = np.array(clf_metrics["confusion_matrix"], dtype=int)
-            print("\nConfusion Matrix:")
-            print(conf_matrix)
-            print("\nClassification Report:")
-            print(
-                classification_report(
-                    label_array,
-                    predicted_labels,
-                    labels=label_classes,
-                    target_names=label_classes,
-                    zero_division=0,
-                )
-            )
-        results["agglomerative"] = ag_metrics
+    disp1 = ConfusionMatrixDisplay(confusion_matrix=conf_mat)
+    disp1.plot(ax=ax[0], cmap='Blues', colorbar=False)
+    ax[0].set_title("Confusion Matrix (Counts)")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    disp2 = ConfusionMatrixDisplay(confusion_matrix=conf_mat_norm)
+    disp2.plot(ax=ax[1], cmap='Blues', colorbar=False)
+    ax[1].set_title("Confusion Matrix (Normalized)")
 
-    report_path = Path(args.report_path) if args.report_path else OUTPUT_DIR / "clustering_metrics.json"
-    assignments_path = OUTPUT_DIR / "clustering_assignments.parquet"
-
-    with report_path.open("w", encoding="utf-8") as fp:
-        json.dump(results, fp, indent=2)
-    print(f"Metrics summary saved to {report_path}")
-
-    assignments_df.to_parquet(assignments_path, index=False)
-    print(f"Cluster assignments saved to {assignments_path}")
+    plt.tight_layout()
+    plt.savefig("output/confusion_matrix.png", dpi=300, bbox_inches='tight')
+    print(f"\n✓ Saved confusion matrix to output/confusion_matrix.png")
+    plt.close()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run from-scratch clustering algorithms on tabular datasets.",
-    )
-    parser.add_argument(
-        "--data",
-        required=True,
-        help="Path or filename of dataset (CSV or Parquet). If not absolute, looks inside the project data folder.",
-    )
-    parser.add_argument(
-        "--target",
-        default=None,
-        help="Optional target column used only for external cluster evaluation metrics.",
-    )
-    parser.add_argument(
-        "--n-clusters",
-        type=int,
-        default=3,
-        help="Number of clusters to form (shared by both algorithms).",
-    )
-    parser.add_argument(
-        "--linkage",
-        choices=["average", "single", "complete", "ward"],
-        default="average",
-        help="Linkage criterion for agglomerative clustering.",
-    )
-    parser.add_argument(
-        "--algorithm",
-        choices=["kmeans", "agglomerative", "both"],
-        default="both",
-        help="Which algorithms to execute.",
-    )
-    parser.add_argument(
-        "--agglomerative-max-samples",
-        type=int,
-        default=1500,
-        help=(
-            "Maximum number of samples used when fitting the agglomerative model. "
-            "Set to 0 to disable downsampling."
-        ),
-    )
-    parser.add_argument(
-        "--scale",
-        action="store_true",
-        help="Apply standard scaling to features before clustering.",
-    )
-    parser.add_argument(
-        "--random-state",
-        type=int,
-        default=42,
-        help="Random seed used for centroid initialisation in K-Means.",
-    )
-    parser.add_argument(
-        "--report-path",
-        help="Optional custom path for the JSON metrics report.",
-    )
-    main(parser.parse_args())
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Train K-Means clustering classifier')
+    parser.add_argument('--data', type=str, required=True, help='Path to CSV/Parquet data file')
+    parser.add_argument('--best-k', type=int, default=None, help='Number of clusters (if not specified, uses default or auto-detected)')
+    parser.add_argument('--find-k', action='store_true', help='Find optimal k using Elbow and Silhouette methods')
+
+    args = parser.parse_args()
+    main(args.data, best_k=args.best_k, find_k=args.find_k)
