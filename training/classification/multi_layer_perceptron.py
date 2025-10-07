@@ -35,12 +35,15 @@ class MLPFromScratch:
         self.losses = []
 
         # Initialize weights and biases for each layer
+        # Using Xavier initialization for better learning
         for i in range(len(layer_sizes) - 1):
+            # Xavier initialization: sqrt(1/n_in) for sigmoid activation
+            scale = np.sqrt(1.0 / layer_sizes[i])
             if self.use_cuda:
-                weight_matrix = cp.random.randn(layer_sizes[i], layer_sizes[i + 1]).astype(cp.float32) * 0.01
+                weight_matrix = cp.random.randn(layer_sizes[i], layer_sizes[i + 1]).astype(cp.float32) * scale
                 bias_vector = cp.zeros((1, layer_sizes[i + 1]), dtype=cp.float32)
             else:
-                weight_matrix = np.random.randn(layer_sizes[i], layer_sizes[i + 1]).astype(np.float32) * 0.01
+                weight_matrix = np.random.randn(layer_sizes[i], layer_sizes[i + 1]).astype(np.float32) * scale
                 bias_vector = np.zeros((1, layer_sizes[i + 1]), dtype=np.float32)
             
             self.weights.append(weight_matrix)
