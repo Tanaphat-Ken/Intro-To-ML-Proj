@@ -17,7 +17,7 @@ from training.regression.linear_regression import LinearRegression, LinearRegres
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 LEARNING_RATE = 0.01
-N_ITERATIONS = 1000
+N_ITERATIONS = 300
 
 # Paths (resolve relative to project data dir)
 SCRIPT_PATH = Path(__file__).resolve()

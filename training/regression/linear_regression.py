@@ -117,11 +117,11 @@ class LinearRegressionGD:
         """
         X = np.array(X)
         y = np.array(y)
-        n_samples = X.shape[0]
+        n_samples, n_features = X.shape
 
-        # Initialize with normal equation solution
-        self.coefficients = np.linalg.pinv(X.T @ X) @ X.T @ y
-        self.intercept = np.mean(y - X @ self.coefficients)
+        # Initialize parameters with zeros (random initialization for proper gradient descent)
+        self.coefficients = np.zeros(n_features)
+        self.intercept = 0
 
         for iteration in range(self.n_iterations):
             y_predicted = self.predict(X)
