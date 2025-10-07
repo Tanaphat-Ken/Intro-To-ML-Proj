@@ -180,10 +180,14 @@ class MultipleLinearRegressionGD:
             loss = np.mean(residuals ** 2)
             self.loss_history.append(loss)
 
-            # Early stopping with tolerance
-            if iteration > 0 and abs(self.loss_history[-2] - self.loss_history[-1]) < self.tolerance:
-                print(f"Converged at iteration {iteration}")
-                break
+            # Early stopping with relative tolerance
+            if iteration > 0:
+                prev_loss = self.loss_history[-2]
+                if prev_loss > 0:
+                    relative_change = abs(prev_loss - loss) / prev_loss
+                    if relative_change < self.tolerance:
+                        print(f"Converged at iteration {iteration+1} (relative change: {relative_change:.6f})")
+                        break
 
     def predict(self, X):
         """

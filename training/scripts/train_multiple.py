@@ -176,6 +176,18 @@ def main(data_path, target_column=None):
         n_iterations=N_ITERATIONS
     )
     mlr_gd_model.fit(X_train_scaled, y_train)
+
+    # Diagnostic output for GD convergence
+    print(f"\n[Diagnostics]")
+    print(f"  Initial loss: {mlr_gd_model.loss_history[0]:.6f}")
+    print(f"  Final loss: {mlr_gd_model.loss_history[-1]:.6f}")
+    print(f"  Iterations completed: {len(mlr_gd_model.loss_history)}/{N_ITERATIONS}")
+    if len(mlr_gd_model.loss_history) > 10:
+        recent_decrease = mlr_gd_model.loss_history[-10] - mlr_gd_model.loss_history[-1]
+        print(f"  Loss decrease (last 10 iters): {recent_decrease:.6f}")
+        if recent_decrease > 0.001:
+            print(f"  ⚠ WARNING: Loss still decreasing significantly - may need more iterations")
+
     mlr_gd_results = evaluate_model(mlr_gd_model, X_train_scaled, X_test_scaled,
                                     y_train, y_test, "Multiple Linear Regression (Gradient Descent)")
 
