@@ -1,5 +1,6 @@
 """
-Training script for Logistic Regression models.
+Training script for Logistic Regression Multiclass Classification (5 classes).
+Matches train_svm.py structure with resampling, PCA, and K-Fold CV.
 """
 import sys
 import os
@@ -7,139 +8,239 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score
+import matplotlib.pyplot as plt
+from collections import Counter
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    confusion_matrix, ConfusionMatrixDisplay, classification_report,
+    precision_recall_fscore_support
+)
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import RandomOverSampler
 
-from training.classification.logistic_regression import LogisticRegressionMSE, LogisticRegressionBCE
+from training.classification.logistic_regression import LogisticRegressionBCE
 
-# Benchmark configuration
+# Configuration
 RANDOM_STATE = 42
-TEST_SIZE = 0.2
 LEARNING_RATE = 0.01
 N_ITERATIONS = 1000
 
 
-def load_data(file_path):
-    """Load dataset from CSV file."""
-    df = pd.read_csv(file_path)
-    X = df.iloc[:, :-1].values
-    y = df.iloc[:, -1].values
-    return X, y
+class OneVsRestLogisticRegression:
+    """One-vs-Rest wrapper for multiclass logistic regression."""
+    
+    def __init__(self, learning_rate=0.01, n_iterations=1000):
+        self.learning_rate = learning_rate
+        self.n_iterations = n_iterations
+        self.classifiers_ = []
+        self.classes_ = None
+    
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        self.classifiers_ = []
+        
+        for cls in self.classes_:
+            lr = LogisticRegressionBCE(
+                learning_rate=self.learning_rate,
+                n_iterations=self.n_iterations
+            )
+            binary_y = np.where(y == cls, 1, 0)
+            lr.fit(X, binary_y)
+            self.classifiers_.append(lr)
+        return self
+    
+    def predict_proba(self, X):
+        scores = np.column_stack([clf.predict_proba(X) for clf in self.classifiers_])
+        # Convert scores to probabilities using softmax
+        exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+        return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+    
+    def predict(self, X):
+        probas = self.predict_proba(X)
+        return self.classes_[np.argmax(probas, axis=1)]
 
-
-def evaluate_model(model, X_train, X_test, y_train, y_test, model_name):
-    """Evaluate classification model and print metrics."""
-    y_train_pred = model.predict(X_train)
-    y_test_pred = model.predict(X_test)
-    y_test_proba = model.predict_proba(X_test)
-
-    train_acc = accuracy_score(y_train, y_train_pred)
-    test_acc = accuracy_score(y_test, y_test_pred)
-    test_precision = precision_score(y_test, y_test_pred, zero_division=0)
-    test_recall = recall_score(y_test, y_test_pred, zero_division=0)
-    test_f1 = f1_score(y_test, y_test_pred, zero_division=0)
-
-    # ROC-AUC if binary classification
-    try:
-        test_roc_auc = roc_auc_score(y_test, y_test_proba)
-    except:
-        test_roc_auc = None
-
-    print(f"\n{model_name} Results:")
-    print(f"{'='*50}")
-    print(f"Train Accuracy: {train_acc:.4f}")
-    print(f"Test Accuracy:  {test_acc:.4f}")
-    print(f"Test Precision: {test_precision:.4f}")
-    print(f"Test Recall:    {test_recall:.4f}")
-    print(f"Test F1-Score:  {test_f1:.4f}")
-    if test_roc_auc is not None:
-        print(f"Test ROC-AUC:   {test_roc_auc:.4f}")
-
-    print(f"\nConfusion Matrix:")
-    print(confusion_matrix(y_test, y_test_pred))
-
-    return {
-        'train_acc': train_acc,
-        'test_acc': test_acc,
-        'test_precision': test_precision,
-        'test_recall': test_recall,
-        'test_f1': test_f1,
-        'test_roc_auc': test_roc_auc
-    }
 
 
 def main(data_path):
-    """Main training pipeline."""
-    print("Loading data...")
-    X, y = load_data(data_path)
-
-    # Split data
+    """Main training pipeline for 5-class classification matching train_svm.py."""
+    # Load data
+    if data_path.endswith('.parquet'):
+        df = pd.read_parquet(data_path)
+    else:
+        df = pd.read_csv(data_path)
+    
+    if df['Booking Status'].dtype == 'object':
+        le = LabelEncoder()
+        df['Booking Status'] = le.fit_transform(df['Booking Status'])
+    
+    X = df.drop('Booking Status', axis=1)
+    y = df['Booking Status']
+    
+    # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
+    
+    # Downsample to median (matching SVM)
+    class_counts = Counter(y_train)
+    median_count = int(np.median(list(class_counts.values())))
+    downsample_strategy = {cls: min(count, median_count) for cls, count in class_counts.items()}
+    rus = RandomUnderSampler(sampling_strategy=downsample_strategy, random_state=42)
+    X_under, y_under = rus.fit_resample(X_train, y_train)
+    target_3 = median_count
 
-    # Scale features
+    ros = RandomOverSampler(sampling_strategy={3: target_3}, random_state=42)
+    X_resampled, y_resampled = ros.fit_resample(X_under, y_under)
+
+    print(f"After resampling: {X_resampled.shape}")
+    print(f"Class distribution: {Counter(y_resampled)}")
+
+    # Scale first, then PCA (correct order, no data leakage)
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_resampled_scaled = scaler.fit_transform(X_resampled)
     X_test_scaled = scaler.transform(X_test)
 
-    print(f"Dataset shape: {X.shape}")
-    print(f"Train set: {X_train.shape[0]} samples")
-    print(f"Test set: {X_test.shape[0]} samples")
-    print(f"Class distribution: {np.bincount(y.astype(int))}")
+    # PCA after scaling - fit on train only, transform both
+    n_components = min(40, X_resampled_scaled.shape[1], len(X_resampled_scaled)-1)
+    pca = PCA(n_components=n_components, random_state=42)
+    X_resampled_pca = pca.fit_transform(X_resampled_scaled)
+    X_test_pca = pca.transform(X_test_scaled)
 
-    # Train Logistic Regression with MSE loss
-    print("\n" + "="*50)
-    print("Training Logistic Regression (MSE Loss)...")
-    print("="*50)
+    train_scaled = X_resampled_pca
+    test_scaled = X_test_pca
 
-    lr_mse_model = LogisticRegressionMSE(
-        learning_rate=LEARNING_RATE,
-        n_iterations=N_ITERATIONS
-    )
-    lr_mse_model.fit(X_train_scaled, y_train)
-    lr_mse_results = evaluate_model(lr_mse_model, X_train_scaled, X_test_scaled,
-                                    y_train, y_test, "Logistic Regression (MSE)")
+    print(f"PCA reduced to {train_scaled.shape[1]} components explaining {pca.explained_variance_ratio_.sum():.2f} variance")
 
-    # Plot loss curve
-    print("\nPlotting MSE loss curve...")
-    lr_mse_model.plot_loss()
+    y_resampled_array = y_resampled.values if hasattr(y_resampled, 'values') else y_resampled
+    
+    # Train final model with K-Fold
+    n_splits = 11
+    skf = StratifiedKFold(n_splits=n_splits, random_state=42, shuffle=True)
+    n_classes = len(np.unique(y_resampled_array))
+    oof = np.zeros((len(train_scaled), n_classes))
+    preds_test = np.zeros((len(test_scaled), n_classes))
+    
+    print(f"\nTraining Logistic Regression with {n_splits}-fold CV...")
+    for fold, (train_idx, val_idx) in enumerate(skf.split(train_scaled, y_resampled_array)):
+        print(f"Fold {fold+1}/{n_splits}...", end=" ")
+        
+        lr = OneVsRestLogisticRegression(
+            learning_rate=LEARNING_RATE,
+            n_iterations=N_ITERATIONS
+        )
+        lr.fit(train_scaled[train_idx], y_resampled_array[train_idx])
+        
+        oof[val_idx] = lr.predict_proba(train_scaled[val_idx])
+        preds_test += lr.predict_proba(test_scaled) / n_splits
+        print("Done")
+    
+    train_pred = np.argmax(oof, axis=1)
+    test_pred = np.argmax(preds_test, axis=1)
 
-    # Train Logistic Regression with BCE loss
-    print("\n" + "="*50)
-    print("Training Logistic Regression (BCE Loss)...")
-    print("="*50)
+    print(f"\nTest Accuracy: {accuracy_score(y_test, test_pred):.4f}")
+    print(f"Test F1 (Macro): {f1_score(y_test, test_pred, average='macro'):.4f}")
+    print(f"Test F1 (Weighted): {f1_score(y_test, test_pred, average='weighted'):.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, test_pred))
 
-    lr_bce_model = LogisticRegressionBCE(
-        learning_rate=LEARNING_RATE,
-        n_iterations=N_ITERATIONS
-    )
-    lr_bce_model.fit(X_train_scaled, y_train)
-    lr_bce_results = evaluate_model(lr_bce_model, X_train_scaled, X_test_scaled,
-                                    y_train, y_test, "Logistic Regression (BCE)")
+    # Confusion Matrix
+    conf_mat = confusion_matrix(y_test, test_pred)
+    print("\nConfusion Matrix (raw counts):")
+    print(conf_mat)
 
-    # Plot loss curve
-    print("\nPlotting BCE loss curve...")
-    lr_bce_model.plot_loss()
+    conf_mat_norm = confusion_matrix(y_test, test_pred, normalize='true')
+    print("\nConfusion Matrix (normalized):")
+    print(np.round(conf_mat_norm, 3))
 
-    # Compare results
-    print("\n" + "="*50)
-    print("Model Comparison")
-    print("="*50)
-    print(f"{'Metric':<20} {'MSE Loss':<15} {'BCE Loss':<15}")
-    print("-"*50)
-    print(f"{'Test Accuracy':<20} {lr_mse_results['test_acc']:<15.4f} {lr_bce_results['test_acc']:<15.4f}")
-    print(f"{'Test F1-Score':<20} {lr_mse_results['test_f1']:<15.4f} {lr_bce_results['test_f1']:<15.4f}")
-    if lr_mse_results['test_roc_auc'] is not None:
-        print(f"{'Test ROC-AUC':<20} {lr_mse_results['test_roc_auc']:<15.4f} {lr_bce_results['test_roc_auc']:<15.4f}")
+    # Create output directory if it doesn't exist
+    os.makedirs('output/plots', exist_ok=True)
+
+    # Plot confusion matrix
+    _, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+    disp1 = ConfusionMatrixDisplay(confusion_matrix=conf_mat)
+    disp1.plot(ax=ax[0], cmap='Blues', colorbar=False)
+    ax[0].set_title("Confusion Matrix (Counts)", fontsize=14, fontweight='bold')
+
+    disp2 = ConfusionMatrixDisplay(confusion_matrix=conf_mat_norm)
+    disp2.plot(ax=ax[1], cmap='Blues', colorbar=False)
+    ax[1].set_title("Confusion Matrix (Normalized)", fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+    cm_path = 'output/plots/logistic_confusion_matrix.png'
+    plt.savefig(cm_path, dpi=300, bbox_inches='tight')
+    print(f"\n✓ Saved confusion matrix to {cm_path}")
+    plt.close()
+
+    precision, recall, f1, support = precision_recall_fscore_support(y_test, test_pred)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(len(precision))
+    width = 0.25
+
+    ax.bar(x - width, precision, width, label='Precision', alpha=0.8)
+    ax.bar(x, recall, width, label='Recall', alpha=0.8)
+    ax.bar(x + width, f1, width, label='F1-Score', alpha=0.8)
+
+    ax.set_xlabel('Class', fontsize=12)
+    ax.set_ylabel('Score', fontsize=12)
+    ax.set_title('Per-Class Performance Metrics (Logistic Regression)', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'Class {i}' for i in range(len(precision))])
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim([0, 1.0])
+
+    plt.tight_layout()
+    metrics_path = 'output/plots/logistic_class_metrics.png'
+    plt.savefig(metrics_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved class metrics plot to {metrics_path}")
+    plt.close()
+
+    # Plot prediction distribution
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # True distribution
+    true_counts = np.bincount(y_test)
+    pred_counts = np.bincount(test_pred, minlength=len(true_counts))
+
+    x = np.arange(len(true_counts))
+    ax1.bar(x, true_counts, alpha=0.7, label='True', color='green')
+    ax1.set_xlabel('Class', fontsize=12)
+    ax1.set_ylabel('Count', fontsize=12)
+    ax1.set_title('True Class Distribution', fontsize=14, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Predicted distribution
+    ax2.bar(x, pred_counts, alpha=0.7, label='Predicted', color='orange')
+    ax2.set_xlabel('Class', fontsize=12)
+    ax2.set_ylabel('Count', fontsize=12)
+    ax2.set_title('Predicted Class Distribution', fontsize=14, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    dist_path = 'output/plots/logistic_class_distribution.png'
+    plt.savefig(dist_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved class distribution plot to {dist_path}")
+    plt.close()
+
+    print(f"\n{'='*60}")
+    print("All plots saved to output/plots/")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Train Logistic Regression models')
-    parser.add_argument('--data', type=str, required=True, help='Path to CSV data file')
+    parser = argparse.ArgumentParser(description='Train Logistic Regression classifier (5-class)')
+    parser.add_argument('--data', type=str, required=True, help='Path to data file')
 
     args = parser.parse_args()
     main(args.data)

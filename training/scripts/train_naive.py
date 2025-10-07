@@ -1,5 +1,5 @@
 """
-Training script for Single Layer Perceptron Multiclass Classification (5 classes).
+Training script for Naive Bayes Classifier (5 classes).
 Matches train_svm.py structure with resampling, PCA, and K-Fold CV.
 """
 import sys
@@ -14,58 +14,18 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
-    accuracy_score, f1_score, classification_report,
+    accuracy_score, f1_score, classification_report, 
     confusion_matrix, ConfusionMatrixDisplay,
     precision_recall_fscore_support
 )
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler
 
-from training.classification.single_layer_perceptron import SLPFromScratch
+from training.classification.naive_bayesian import NaiveBayesClassifier
 
 # Configuration
 RANDOM_STATE = 42
-LEARNING_RATE = 0.01
-N_ITERATIONS = 1000
-
-
-class OneVsRestSLP:
-    """One-vs-Rest wrapper for multiclass SLP classification."""
-    
-    def __init__(self, input_size, learning_rate=0.01, num_iterations=1000, use_cuda=False):
-        self.input_size = input_size
-        self.learning_rate = learning_rate
-        self.num_iterations = num_iterations
-        self.use_cuda = use_cuda
-        self.classifiers_ = []
-        self.classes_ = None
-    
-    def fit(self, X, y):
-        self.classes_ = np.unique(y)
-        self.classifiers_ = []
-        
-        for cls in self.classes_:
-            print(f"\nTraining classifier for class {cls}...")
-            slp = SLPFromScratch(
-                input_size=self.input_size,
-                learning_rate=self.learning_rate,
-                num_iterations=self.num_iterations,
-                use_cuda=self.use_cuda
-            )
-            binary_y = np.where(y == cls, 1, 0)
-            slp.fit(X, binary_y)
-            self.classifiers_.append(slp)
-        return self
-    
-    def predict_proba(self, X):
-        scores = np.column_stack([clf.predict_proba(X) for clf in self.classifiers_])
-        # Convert scores to probabilities using softmax
-        exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
-        return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
-    
-    def predict(self, X):
-        probas = self.predict_proba(X)
-        return self.classes_[np.argmax(probas, axis=1)]
+USE_ADD1_SMOOTHING = True
 
 
 def main(data_path):
@@ -118,6 +78,13 @@ def main(data_path):
 
     print(f"PCA reduced to {train_scaled.shape[1]} components explaining {pca.explained_variance_ratio_.sum():.2f} variance")
 
+    # Convert back to DataFrame for Naive Bayes (it expects DataFrame)
+    feature_names = [f'PC{i+1}' for i in range(train_scaled.shape[1])]
+    train_df = pd.DataFrame(train_scaled, columns=feature_names)
+    train_df['Booking Status'] = y_resampled.values if hasattr(y_resampled, 'values') else y_resampled
+    
+    test_df = pd.DataFrame(test_scaled, columns=feature_names)
+    
     y_resampled_array = y_resampled.values if hasattr(y_resampled, 'values') else y_resampled
     
     # Train final model with K-Fold
@@ -127,31 +94,46 @@ def main(data_path):
     oof = np.zeros((len(train_scaled), n_classes))
     preds_test = np.zeros((len(test_scaled), n_classes))
     
-    print(f"\nTraining SLP with {n_splits}-fold CV...")
+    print(f"\nTraining Naive Bayes with {n_splits}-fold CV...")
+    
     for fold, (train_idx, val_idx) in enumerate(skf.split(train_scaled, y_resampled_array)):
-        print(f"\n{'='*60}")
-        print(f"Fold {fold+1}/{n_splits}")
-        print(f"{'='*60}")
+        print(f"Fold {fold+1}/{n_splits}...", end=" ", flush=True)
         
-        slp = OneVsRestSLP(
-            input_size=train_scaled.shape[1],
-            learning_rate=LEARNING_RATE,
-            num_iterations=N_ITERATIONS,
-            use_cuda=False  # Set to True if you have CUDA available
+        # Prepare fold data
+        fold_train_df = train_df.iloc[train_idx].copy()
+        fold_val_df = train_df.iloc[val_idx].copy()
+        
+        # Initialize and train Naive Bayes
+        # All features are numerical (PCA components)
+        nb = NaiveBayesClassifier(
+            categorical_features=[],  # No categorical after PCA
+            numerical_features=feature_names,
+            target_feature='Booking Status',
+            use_add1_smoothing=USE_ADD1_SMOOTHING
         )
-        slp.fit(train_scaled[train_idx], y_resampled_array[train_idx])
+        nb.fit(fold_train_df)
         
-        oof[val_idx] = slp.predict_proba(train_scaled[val_idx])
-        preds_test += slp.predict_proba(test_scaled) / n_splits
-        print(f"\nFold {fold+1} completed")
+        # Predict on validation set
+        for idx, row_idx in enumerate(val_idx):
+            query = {feat: train_scaled[row_idx, i] for i, feat in enumerate(feature_names)}
+            proba = nb.predict_proba(query)
+            # Store probabilities
+            for class_idx, prob in proba.items():
+                oof[row_idx, int(class_idx)] = prob
+        
+        # Predict on test set
+        for idx in range(len(test_scaled)):
+            query = {feat: test_scaled[idx, i] for i, feat in enumerate(feature_names)}
+            proba = nb.predict_proba(query)
+            for class_idx, prob in proba.items():
+                preds_test[idx, int(class_idx)] += prob / n_splits
+        
+        print("Done")
     
     train_pred = np.argmax(oof, axis=1)
     test_pred = np.argmax(preds_test, axis=1)
 
-    print(f"\n{'='*60}")
-    print("FINAL RESULTS")
-    print(f"{'='*60}")
-    print(f"Test Accuracy: {accuracy_score(y_test, test_pred):.4f}")
+    print(f"\nTest Accuracy: {accuracy_score(y_test, test_pred):.4f}")
     print(f"Test F1 (Macro): {f1_score(y_test, test_pred, average='macro'):.4f}")
     print(f"Test F1 (Weighted): {f1_score(y_test, test_pred, average='weighted'):.4f}")
     print("\nClassification Report:")
@@ -181,7 +163,7 @@ def main(data_path):
     ax[1].set_title("Confusion Matrix (Normalized)", fontsize=14, fontweight='bold')
 
     plt.tight_layout()
-    cm_path = 'output/plots/slp_confusion_matrix.png'
+    cm_path = 'output/plots/naive_bayes_confusion_matrix.png'
     plt.savefig(cm_path, dpi=300, bbox_inches='tight')
     print(f"\n✓ Saved confusion matrix to {cm_path}")
     plt.close()
@@ -198,7 +180,7 @@ def main(data_path):
 
     ax.set_xlabel('Class', fontsize=12)
     ax.set_ylabel('Score', fontsize=12)
-    ax.set_title('Per-Class Performance Metrics (SLP)', fontsize=14, fontweight='bold')
+    ax.set_title('Per-Class Performance Metrics (Naive Bayes)', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'Class {i}' for i in range(len(precision))])
     ax.legend()
@@ -206,7 +188,7 @@ def main(data_path):
     ax.set_ylim([0, 1.0])
 
     plt.tight_layout()
-    metrics_path = 'output/plots/slp_class_metrics.png'
+    metrics_path = 'output/plots/naive_bayes_class_metrics.png'
     plt.savefig(metrics_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved class metrics plot to {metrics_path}")
     plt.close()
@@ -237,7 +219,7 @@ def main(data_path):
     ax2.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
-    dist_path = 'output/plots/slp_class_distribution.png'
+    dist_path = 'output/plots/naive_bayes_class_distribution.png'
     plt.savefig(dist_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved class distribution plot to {dist_path}")
     plt.close()
@@ -250,7 +232,7 @@ def main(data_path):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Train SLP classifier (5-class)')
+    parser = argparse.ArgumentParser(description='Train Naive Bayes classifier (5-class)')
     parser.add_argument('--data', type=str, required=True, help='Path to data file')
 
     args = parser.parse_args()
