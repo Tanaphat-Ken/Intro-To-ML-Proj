@@ -25,21 +25,20 @@ from training.classification.multi_layer_perceptron import MLPFromScratch
 
 # Configuration
 RANDOM_STATE = 42
-LEARNING_RATE = 0.006
+LEARNING_RATE = 0.01
 N_ITERATIONS = 1000
-HIDDEN_LAYERS = [32]
+HIDDEN_LAYERS = [64, 32, 16]
 
 
 class OneVsRestMLP:
     """One-vs-Rest wrapper for multiclass MLP classification."""
     
-    def __init__(self, input_size, learning_rate=0.01, num_iterations=500, 
-                 hidden_layers=[32], use_cuda=False):
+    def __init__(self, input_size, learning_rate=0.01, num_iterations=500,
+                 hidden_layers=[32]):
         self.input_size = input_size
         self.learning_rate = learning_rate
         self.num_iterations = num_iterations
         self.hidden_layers = hidden_layers
-        self.use_cuda = use_cuda
         self.classifiers_ = []
         self.classes_ = None
     
@@ -55,8 +54,7 @@ class OneVsRestMLP:
             mlp = MLPFromScratch(
                 layer_sizes=layer_sizes,
                 learning_rate=self.learning_rate,
-                num_iterations=self.num_iterations,
-                use_cuda=self.use_cuda
+                num_iterations=self.num_iterations
             )
             binary_y = np.where(y == cls, 1, 0)
             mlp.fit(X, binary_y)
@@ -137,7 +135,7 @@ def main(data_path):
     y_resampled_array = y_resampled.values if hasattr(y_resampled, 'values') else y_resampled
     
     # Train final model with K-Fold
-    n_splits = 11
+    n_splits = 3
     skf = StratifiedKFold(n_splits=n_splits, random_state=42, shuffle=True)
     n_classes = len(np.unique(y_resampled_array))
     oof = np.zeros((len(train_scaled), n_classes))
@@ -153,8 +151,7 @@ def main(data_path):
             input_size=train_scaled.shape[1],
             learning_rate=LEARNING_RATE,
             num_iterations=N_ITERATIONS,
-            hidden_layers=HIDDEN_LAYERS,
-            use_cuda=True  # Enable CUDA acceleration
+            hidden_layers=HIDDEN_LAYERS
         )
         mlp.fit(train_scaled[train_idx], y_resampled_array[train_idx])
         

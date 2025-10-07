@@ -25,7 +25,7 @@ ArrayLike = np.ndarray
 
 
 @dataclass(slots=True)
-class KMeansScratch:
+class KMeans:
     """K-Means clustering using Lloyd's algorithm.
 
     Parameters
@@ -81,7 +81,7 @@ class KMeansScratch:
 
         Returns
         -------
-        self : KMeansScratch
+        self : KMeans
             Fitted estimator.
         """
         X = np.asarray(X, dtype=float)
@@ -284,10 +284,10 @@ class KMeansScratch:
 
     def _require_fitted(self) -> None:
         if not self._is_fitted:
-            raise RuntimeError("KMeansScratch instance is not fitted yet. Call 'fit' first.")
+            raise RuntimeError("KMeans instance is not fitted yet. Call 'fit' first.")
 
 
-class AgglomerativeClusteringScratch:
+class AgglomerativeClustering:
     """Bottom-up hierarchical clustering with configurable linkage.
 
     Parameters
@@ -330,7 +330,7 @@ class AgglomerativeClusteringScratch:
         self.distance_history_: list[float] = []
 
     # ------------------------------------------------------------------
-    def fit(self, X: ArrayLike) -> "AgglomerativeClusteringScratch":
+    def fit(self, X: ArrayLike) -> "AgglomerativeClustering":
         """Fit agglomerative clustering.
 
         Parameters
@@ -340,7 +340,7 @@ class AgglomerativeClusteringScratch:
 
         Returns
         -------
-        self : AgglomerativeClusteringScratch
+        self : AgglomerativeClustering
             Fitted estimator.
         """
         X = np.asarray(X, dtype=float)

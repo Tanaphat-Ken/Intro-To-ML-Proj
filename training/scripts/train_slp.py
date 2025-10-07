@@ -31,12 +31,11 @@ N_ITERATIONS = 1000
 
 class OneVsRestSLP:
     """One-vs-Rest wrapper for multiclass SLP classification."""
-    
-    def __init__(self, input_size, learning_rate=0.01, num_iterations=1000, use_cuda=False):
+
+    def __init__(self, input_size, learning_rate=0.01, num_iterations=1000):
         self.input_size = input_size
         self.learning_rate = learning_rate
         self.num_iterations = num_iterations
-        self.use_cuda = use_cuda
         self.classifiers_ = []
         self.classes_ = None
     
@@ -49,8 +48,7 @@ class OneVsRestSLP:
             slp = SLPFromScratch(
                 input_size=self.input_size,
                 learning_rate=self.learning_rate,
-                num_iterations=self.num_iterations,
-                use_cuda=self.use_cuda
+                num_iterations=self.num_iterations
             )
             binary_y = np.where(y == cls, 1, 0)
             slp.fit(X, binary_y)
@@ -136,8 +134,7 @@ def main(data_path):
         slp = OneVsRestSLP(
             input_size=train_scaled.shape[1],
             learning_rate=LEARNING_RATE,
-            num_iterations=N_ITERATIONS,
-            use_cuda=False  # Set to True if you have CUDA available
+            num_iterations=N_ITERATIONS
         )
         slp.fit(train_scaled[train_idx], y_resampled_array[train_idx])
         

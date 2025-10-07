@@ -31,20 +31,20 @@ except Exception:
 
 # Configuration
 RANDOM_STATE = 42
-LEARNING_RATE = 0.3
-BOOSTING_ROUNDS = 10
-DEPTH = 5
-MIN_LEAF = 5
+LEARNING_RATE = 0.1
+BOOSTING_ROUNDS = 5
+DEPTH = 6
+MIN_LEAF = 20
 SUBSAMPLE_COLS = 0.8
-USE_CUDA = True  # Set to True to use GPU acceleration
+EPS = 0.3
 
 
 class OneVsRestXGBoost:
     """One-vs-Rest wrapper for multiclass XGBoost classification."""
     
-    def __init__(self, learning_rate=0.3, boosting_rounds=10, depth=5, 
-                 min_leaf=5, subsample_cols=0.8, min_child_weight=1, 
-                 lambda_=1.5, gamma=1, eps=0.1, use_cuda=False):
+    def __init__(self, learning_rate=0.3, boosting_rounds=10, depth=5,
+                 min_leaf=5, subsample_cols=0.8, min_child_weight=1,
+                 lambda_=1.5, gamma=1, eps=0.1):
         self.learning_rate = learning_rate
         self.boosting_rounds = boosting_rounds
         self.depth = depth
@@ -54,7 +54,6 @@ class OneVsRestXGBoost:
         self.lambda_ = lambda_
         self.gamma = gamma
         self.eps = eps
-        self.use_cuda = use_cuda
         self.classifiers_ = []
         self.classes_ = None
     
@@ -77,8 +76,7 @@ class OneVsRestXGBoost:
                 min_child_weight=self.min_child_weight,
                 lambda_=self.lambda_,
                 gamma=self.gamma,
-                eps=self.eps,
-                use_cuda=self.use_cuda
+                eps=self.eps
             )
             self.classifiers_.append(xgb)
         return self
@@ -177,8 +175,7 @@ def main(data_path):
             min_child_weight=1,
             lambda_=1.5,
             gamma=1,
-            eps=0.1,
-            use_cuda=USE_CUDA
+            eps=EPS
         )
         xgb.fit(train_scaled[train_idx], y_resampled_array[train_idx])
         
