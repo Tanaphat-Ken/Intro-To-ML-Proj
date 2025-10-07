@@ -88,7 +88,7 @@ class PolynomialRegression:
                 self.loss_history.append(loss)
                 print(f"Iteration {iteration}, Loss: {loss:.6f}")
 
-    def plot_loss(self):
+    def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
         plt.plot(range(0, self.n_iterations, 100), self.loss_history, label='MSE Loss', marker='o')
@@ -98,6 +98,12 @@ class PolynomialRegression:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
+
+        if save_path:
+            import os
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Plot saved to {save_path}")
         plt.show()
 
 
