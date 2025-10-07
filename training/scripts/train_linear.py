@@ -2,6 +2,8 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -17,25 +19,87 @@ TEST_SIZE = 0.2
 LEARNING_RATE = 0.01
 N_ITERATIONS = 1000
 
-# Output paths
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '../../output')
-MODELS_DIR = os.path.join(OUTPUT_DIR, 'models')
-PLOTS_DIR = os.path.join(OUTPUT_DIR, 'plots')
+# Paths (resolve relative to project data dir)
+SCRIPT_PATH = Path(__file__).resolve()
+SYS_PATH_ROOT = SCRIPT_PATH.parents[2]
+DATA_DIR = SYS_PATH_ROOT / "data"
+OUTPUT_DIR = SYS_PATH_ROOT / "output"
+MODELS_DIR = OUTPUT_DIR / "models"
+PLOTS_DIR = OUTPUT_DIR / "plots"
+
+# Ensure output directories exist
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_data(file_path):
-    df = pd.read_csv(file_path)
+def _resolve_dataset_path(path_str: str) -> Path:
+    candidate = Path(path_str)
+    potential_paths = [candidate]
 
-    # Select only numeric columns
+    if not candidate.is_absolute():
+        potential_paths.extend([Path.cwd() / candidate, DATA_DIR / candidate])
+
+    if candidate.suffix == "":
+        potential_paths.extend(
+            [p.with_suffix(ext) for p in potential_paths for ext in (".parquet", ".csv")]
+        )
+
+    for path in potential_paths:
+        if path.exists():
+            return path
+
+    searched = "\n".join(str(p) for p in potential_paths)
+    raise FileNotFoundError(f"Could not locate dataset '{path_str}'. Paths tried:\n{searched}")
+
+
+def load_data(file_path, target_column: str | None = None):
+    """Load data from CSV or Parquet. If target_column is provided, use it as y. Otherwise
+    fall back to previous behaviour: take numeric columns and use last numeric column as target.
+    Returns (X, y) as numpy arrays.
+    """
+    dataset_path = _resolve_dataset_path(file_path)
+    if dataset_path.suffix.lower() == ".parquet":
+        df = pd.read_parquet(dataset_path)
+    elif dataset_path.suffix.lower() == ".csv":
+        df = pd.read_csv(dataset_path)
+    else:
+        raise ValueError(f"Unsupported file extension '{dataset_path.suffix}'. Use CSV or Parquet files.")
+
+    # Special case: if this looks like the demand dataset, use demand_count as target
+    if 'demand_count' in df.columns:
+        if 'datetime_hour' in df.columns:
+            feature_df = df.drop(columns=['demand_count', 'datetime_hour'])
+        else:
+            feature_df = df.drop(columns=['demand_count'])
+        y = df['demand_count'].to_numpy()
+        # Keep only numeric features for X
+        numeric_df = feature_df.select_dtypes(include=[np.number])
+        if numeric_df.shape[1] == 0:
+            raise ValueError("After dropping 'demand_count' and 'datetime_hour' no numeric features remain")
+        X = numeric_df.to_numpy()
+        print(f"Detected 'demand_count' target. Using {X.shape[1]} numeric features (dropped datetime_hour if present)")
+        return X, y
+
+    # If explicit target specified, validate and extract
+    if target_column:
+        if target_column not in df.columns:
+            raise KeyError(f"Target column '{target_column}' not found. Available columns: {df.columns.tolist()}")
+        y = df[target_column].to_numpy()
+        if not np.issubdtype(y.dtype, np.number):
+            raise ValueError(f"Target column '{target_column}' must be numeric for regression. Got dtype {df[target_column].dtype}")
+        feature_df = df.drop(columns=[target_column])
+        # Keep only numeric features
+        numeric_df = feature_df.select_dtypes(include=[np.number])
+        X = numeric_df.to_numpy()
+        print(f"Using target column '{target_column}' and {X.shape[1]} numeric features")
+        return X, y
+
+    # Keep previous behaviour: select numeric columns and use last as target
     numeric_df = df.select_dtypes(include=[np.number])
-
     if numeric_df.shape[1] < 2:
         raise ValueError(f"Need at least 2 numeric columns. Found {numeric_df.shape[1]}")
-
-    # Use last numeric column as target
-    X = numeric_df.iloc[:, :-1].values
-    y = numeric_df.iloc[:, -1].values
-
+    X = numeric_df.iloc[:, :-1].to_numpy()
+    y = numeric_df.iloc[:, -1].to_numpy()
     print(f"Selected {X.shape[1]} numeric features from {df.shape[1]} total columns")
 
     return X, y
@@ -68,9 +132,9 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, model_name):
     }
 
 
-def main(data_path):
+def main(data_path, target_column=None):
     print("Loading data...")
-    X, y = load_data(data_path)
+    X, y = load_data(data_path, target_column)
 
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
@@ -134,7 +198,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Train Linear Regression models')
-    parser.add_argument('--data', type=str, required=True, help='Path to CSV data file')
+    parser.add_argument('--data', type=str, required=True, help='Path or filename of dataset (CSV or Parquet). If not absolute, looks inside the project data folder.')
+    parser.add_argument('--target', type=str, default=None, help='Optional target column name (numeric). If omitted, last numeric column is used as target.')
 
     args = parser.parse_args()
-    main(args.data)
+    main(args.data, target_column=args.target)
