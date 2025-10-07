@@ -91,7 +91,7 @@ class PolynomialRegression:
     def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
-        plt.plot(range(0, self.n_iterations, 100), self.loss_history, label='MSE Loss', marker='o')
+        plt.plot(range(len(self.loss_history)), self.loss_history, label='MSE Loss')
         plt.xlabel("Iteration")
         plt.ylabel("Loss (MSE)")
         plt.title("Loss Curve: Polynomial Regression")

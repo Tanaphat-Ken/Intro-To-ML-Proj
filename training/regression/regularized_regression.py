@@ -59,6 +59,15 @@ class RidgeRegression:
             total_loss = mse_loss + l2_penalty
             self.loss_history.append(total_loss)
 
+            # Early stopping with relative tolerance
+            if iteration > 0:
+                prev_loss = self.loss_history[-2]
+                if prev_loss > 0:
+                    relative_change = abs(prev_loss - total_loss) / prev_loss
+                    if relative_change < self.tolerance:
+                        print(f"Ridge converged at iteration {iteration+1} (relative change: {relative_change:.6f})")
+                        break
+
             # Calculate gradients
             gradient_coefficients = (-1 / n_samples) * X.T @ (y - y_predicted) + self.alpha * self.coefficients
             gradient_intercept = (-1 / n_samples) * np.sum(y - y_predicted)
@@ -89,7 +98,7 @@ class RidgeRegression:
     def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
-        plt.plot(range(self.n_iterations), self.loss_history, label='Ridge Loss (MSE + L2)')
+        plt.plot(range(len(self.loss_history)), self.loss_history, label='Ridge Loss (MSE + L2)')
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
         plt.title("Loss Curve: Ridge Regression")
@@ -176,6 +185,15 @@ class LassoRegression:
             total_loss = mse_loss + l1_penalty
             self.loss_history.append(total_loss)
 
+            # Early stopping with relative tolerance
+            if iteration > 0:
+                prev_loss = self.loss_history[-2]
+                if prev_loss > 0:
+                    relative_change = abs(prev_loss - total_loss) / prev_loss
+                    if relative_change < self.tolerance:
+                        print(f"Lasso converged at iteration {iteration+1} (relative change: {relative_change:.6f})")
+                        break
+
             # Calculate gradients with L1 penalty (using sign function)
             gradient_coefficients = (-1 / n_samples) * X.T @ (y - y_predicted) + self.alpha * np.sign(self.coefficients)
             gradient_intercept = (-1 / n_samples) * np.sum(y - y_predicted)
@@ -229,7 +247,7 @@ class LassoRegression:
     def plot_loss(self, save_path=None):
         """Plot the loss curve during training."""
         plt.figure(figsize=(8, 5))
-        plt.plot(range(self.n_iterations), self.loss_history, label='Lasso Loss (MSE + L1)')
+        plt.plot(range(len(self.loss_history)), self.loss_history, label='Lasso Loss (MSE + L1)')
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
         plt.title("Loss Curve: Lasso Regression")
