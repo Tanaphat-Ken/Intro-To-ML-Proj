@@ -1,0 +1,79 @@
+{
+  "model_name": "Multi-Layer Perceptron (Completed vs Other)",
+  "threshold": 0.500000051132357,
+  "train": {
+    "accuracy": 0.4988440860215054,
+    "f1_macro": 0.4988440860215054,
+    "precision_per_class": [
+      0.4988440860215054,
+      0.4988440860215054
+    ],
+    "recall_per_class": [
+      0.4988440860215054,
+      0.4988440860215054
+    ],
+    "confusion_matrix": [
+      [
+        37114,
+        37286
+      ],
+      [
+        37286,
+        37114
+      ]
+    ]
+  },
+  "test": {
+    "accuracy": 0.5061,
+    "f1_macro": 0.49833235148442784,
+    "precision_per_class": [
+      0.3850810519943499,
+      0.6249917399061653
+    ],
+    "recall_per_class": [
+      0.5021929824561403,
+      0.508494623655914
+    ],
+    "confusion_matrix": [
+      [
+        5725,
+        5675
+      ],
+      [
+        9142,
+        9458
+      ]
+    ]
+  },
+  "classes": [
+    "Other",
+    "Completed"
+  ],
+  "classification_report": {
+    "Other": {
+      "precision": 0.3850810519943499,
+      "recall": 0.5021929824561403,
+      "f1-score": 0.43590817375414015,
+      "support": 11400.0
+    },
+    "Completed": {
+      "precision": 0.6249917399061653,
+      "recall": 0.508494623655914,
+      "f1-score": 0.5607565292147155,
+      "support": 18600.0
+    },
+    "accuracy": 0.5061,
+    "macro avg": {
+      "precision": 0.5050363959502576,
+      "recall": 0.5053438030560271,
+      "f1-score": 0.49833235148442784,
+      "support": 30000.0
+    },
+    "weighted avg": {
+      "precision": 0.5338256784996754,
+      "recall": 0.5061,
+      "f1-score": 0.5133141541396968,
+      "support": 30000.0
+    }
+  }
+}
