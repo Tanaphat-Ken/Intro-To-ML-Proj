@@ -1,0 +1,298 @@
+"""
+Training script for XGBoost Multiclass Classification (5 classes).
+Matches train_svm.py structure with resampling, PCA, and K-Fold CV.
+"""
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from collections import Counter
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.metrics import (
+    accuracy_score, f1_score, classification_report,
+    confusion_matrix, ConfusionMatrixDisplay,
+    precision_recall_fscore_support
+)
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import RandomOverSampler
+
+from training.classification.xgboost import XGBoostClassifier
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except Exception:
+    tqdm = list
+    TQDM_AVAILABLE = False
+
+# Configuration
+RANDOM_STATE = 42
+LEARNING_RATE = 0.3
+BOOSTING_ROUNDS = 10
+DEPTH = 5
+MIN_LEAF = 5
+SUBSAMPLE_COLS = 0.8
+USE_CUDA = True  # Set to True to use GPU acceleration
+
+
+class OneVsRestXGBoost:
+    """One-vs-Rest wrapper for multiclass XGBoost classification."""
+    
+    def __init__(self, learning_rate=0.3, boosting_rounds=10, depth=5, 
+                 min_leaf=5, subsample_cols=0.8, min_child_weight=1, 
+                 lambda_=1.5, gamma=1, eps=0.1, use_cuda=False):
+        self.learning_rate = learning_rate
+        self.boosting_rounds = boosting_rounds
+        self.depth = depth
+        self.min_leaf = min_leaf
+        self.subsample_cols = subsample_cols
+        self.min_child_weight = min_child_weight
+        self.lambda_ = lambda_
+        self.gamma = gamma
+        self.eps = eps
+        self.use_cuda = use_cuda
+        self.classifiers_ = []
+        self.classes_ = None
+    
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        self.classifiers_ = []
+        
+        iterable = tqdm(self.classes_, desc='Classes') if TQDM_AVAILABLE else self.classes_
+        for cls in iterable:
+            print(f"\nTraining XGBoost classifier for class {cls}...")
+            xgb = XGBoostClassifier()
+            binary_y = np.where(y == cls, 1, 0)
+            xgb.fit(
+                X, binary_y,
+                learning_rate=self.learning_rate,
+                boosting_rounds=self.boosting_rounds,
+                depth=self.depth,
+                min_leaf=self.min_leaf,
+                subsample_cols=self.subsample_cols,
+                min_child_weight=self.min_child_weight,
+                lambda_=self.lambda_,
+                gamma=self.gamma,
+                eps=self.eps,
+                use_cuda=self.use_cuda
+            )
+            self.classifiers_.append(xgb)
+        return self
+    
+    def predict_proba(self, X):
+        """Get probability scores for each class."""
+        probas = []
+        for clf in self.classifiers_:
+            proba = clf.predict_proba(X)
+            # Ensure it's 1D array
+            if hasattr(proba, 'flatten'):
+                proba = proba.flatten()
+            probas.append(proba)
+        
+        scores = np.column_stack(probas)
+        # Convert scores to probabilities using softmax
+        exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+        return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+    
+    def predict(self, X):
+        probas = self.predict_proba(X)
+        return self.classes_[np.argmax(probas, axis=1)]
+
+
+def main(data_path):
+    """Main training pipeline for 5-class classification matching train_svm.py."""
+    # Load data
+    if data_path.endswith('.parquet'):
+        df = pd.read_parquet(data_path)
+    else:
+        df = pd.read_csv(data_path)
+    
+    if df['Booking Status'].dtype == 'object':
+        le = LabelEncoder()
+        df['Booking Status'] = le.fit_transform(df['Booking Status'])
+    
+    X = df.drop('Booking Status', axis=1)
+    y = df['Booking Status']
+    
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    
+    # Downsample to median (matching SVM)
+    class_counts = Counter(y_train)
+    median_count = int(np.median(list(class_counts.values())))
+    downsample_strategy = {cls: min(count, median_count) for cls, count in class_counts.items()}
+    rus = RandomUnderSampler(sampling_strategy=downsample_strategy, random_state=42)
+    X_under, y_under = rus.fit_resample(X_train, y_train)
+    target_3 = median_count
+
+    ros = RandomOverSampler(sampling_strategy={3: target_3}, random_state=42)
+    X_resampled, y_resampled = ros.fit_resample(X_under, y_under)
+
+    print(f"After resampling: {X_resampled.shape}")
+    print(f"Class distribution: {Counter(y_resampled)}")
+
+    # Scale first, then PCA (correct order, no data leakage)
+    scaler = StandardScaler()
+    X_resampled_scaled = scaler.fit_transform(X_resampled)
+    X_test_scaled = scaler.transform(X_test)
+
+    # PCA after scaling - fit on train only, transform both
+    n_components = min(40, X_resampled_scaled.shape[1], len(X_resampled_scaled)-1)
+    pca = PCA(n_components=n_components, random_state=42)
+    X_resampled_pca = pca.fit_transform(X_resampled_scaled)
+    X_test_pca = pca.transform(X_test_scaled)
+
+    train_scaled = X_resampled_pca
+    test_scaled = X_test_pca
+
+    print(f"PCA reduced to {train_scaled.shape[1]} components explaining {pca.explained_variance_ratio_.sum():.2f} variance")
+
+    y_resampled_array = y_resampled.values if hasattr(y_resampled, 'values') else y_resampled
+    
+    # Train final model with K-Fold
+    n_splits = 5
+    skf = StratifiedKFold(n_splits=n_splits, random_state=42, shuffle=True)
+    n_classes = len(np.unique(y_resampled_array))
+    oof = np.zeros((len(train_scaled), n_classes))
+    preds_test = np.zeros((len(test_scaled), n_classes))
+    
+    print(f"\nTraining XGBoost with {n_splits}-fold CV...")
+    for fold, (train_idx, val_idx) in enumerate(skf.split(train_scaled, y_resampled_array)):
+        print(f"\n{'='*60}")
+        print(f"Fold {fold+1}/{n_splits}")
+        print(f"{'='*60}")
+        
+        xgb = OneVsRestXGBoost(
+            learning_rate=LEARNING_RATE,
+            boosting_rounds=BOOSTING_ROUNDS,
+            depth=DEPTH,
+            min_leaf=MIN_LEAF,
+            subsample_cols=SUBSAMPLE_COLS,
+            min_child_weight=1,
+            lambda_=1.5,
+            gamma=1,
+            eps=0.1,
+            use_cuda=USE_CUDA
+        )
+        xgb.fit(train_scaled[train_idx], y_resampled_array[train_idx])
+        
+        oof[val_idx] = xgb.predict_proba(train_scaled[val_idx])
+        preds_test += xgb.predict_proba(test_scaled) / n_splits
+        print(f"\nFold {fold+1} completed")
+    
+    train_pred = np.argmax(oof, axis=1)
+    test_pred = np.argmax(preds_test, axis=1)
+
+    print(f"\n{'='*60}")
+    print("FINAL RESULTS")
+    print(f"{'='*60}")
+    print(f"Test Accuracy: {accuracy_score(y_test, test_pred):.4f}")
+    print(f"Test F1 (Macro): {f1_score(y_test, test_pred, average='macro'):.4f}")
+    print(f"Test F1 (Weighted): {f1_score(y_test, test_pred, average='weighted'):.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, test_pred))
+
+    # Confusion Matrix
+    conf_mat = confusion_matrix(y_test, test_pred)
+    print("\nConfusion Matrix (raw counts):")
+    print(conf_mat)
+
+    conf_mat_norm = confusion_matrix(y_test, test_pred, normalize='true')
+    print("\nConfusion Matrix (normalized):")
+    print(np.round(conf_mat_norm, 3))
+
+    # Create output directory if it doesn't exist
+    os.makedirs('output/plots', exist_ok=True)
+
+    # Plot confusion matrix
+    _, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+    disp1 = ConfusionMatrixDisplay(confusion_matrix=conf_mat)
+    disp1.plot(ax=ax[0], cmap='Blues', colorbar=False)
+    ax[0].set_title("Confusion Matrix (Counts)", fontsize=14, fontweight='bold')
+
+    disp2 = ConfusionMatrixDisplay(confusion_matrix=conf_mat_norm)
+    disp2.plot(ax=ax[1], cmap='Blues', colorbar=False)
+    ax[1].set_title("Confusion Matrix (Normalized)", fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+    cm_path = 'output/plots/xgboost_confusion_matrix.png'
+    plt.savefig(cm_path, dpi=300, bbox_inches='tight')
+    print(f"\n✓ Saved confusion matrix to {cm_path}")
+    plt.close()
+
+    precision, recall, f1, support = precision_recall_fscore_support(y_test, test_pred)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(len(precision))
+    width = 0.25
+
+    ax.bar(x - width, precision, width, label='Precision', alpha=0.8)
+    ax.bar(x, recall, width, label='Recall', alpha=0.8)
+    ax.bar(x + width, f1, width, label='F1-Score', alpha=0.8)
+
+    ax.set_xlabel('Class', fontsize=12)
+    ax.set_ylabel('Score', fontsize=12)
+    ax.set_title('Per-Class Performance Metrics (XGBoost)', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'Class {i}' for i in range(len(precision))])
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim([0, 1.0])
+
+    plt.tight_layout()
+    metrics_path = 'output/plots/xgboost_class_metrics.png'
+    plt.savefig(metrics_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved class metrics plot to {metrics_path}")
+    plt.close()
+
+    # Plot prediction distribution
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # True distribution
+    true_counts = np.bincount(y_test)
+    pred_counts = np.bincount(test_pred, minlength=len(true_counts))
+
+    x = np.arange(len(true_counts))
+    ax1.bar(x, true_counts, alpha=0.7, label='True', color='green')
+    ax1.set_xlabel('Class', fontsize=12)
+    ax1.set_ylabel('Count', fontsize=12)
+    ax1.set_title('True Class Distribution', fontsize=14, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Predicted distribution
+    ax2.bar(x, pred_counts, alpha=0.7, label='Predicted', color='orange')
+    ax2.set_xlabel('Class', fontsize=12)
+    ax2.set_ylabel('Count', fontsize=12)
+    ax2.set_title('Predicted Class Distribution', fontsize=14, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    dist_path = 'output/plots/xgboost_class_distribution.png'
+    plt.savefig(dist_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved class distribution plot to {dist_path}")
+    plt.close()
+
+    print(f"\n{'='*60}")
+    print("All plots saved to output/plots/")
+    print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Train XGBoost classifier (5-class)')
+    parser.add_argument('--data', type=str, required=True, help='Path to data file')
+
+    args = parser.parse_args()
+    main(args.data)
